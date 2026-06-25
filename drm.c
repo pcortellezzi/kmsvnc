@@ -777,11 +777,15 @@ int drm_get_cursor_position(int *x, int *y) {
     if (drm->cursor_plane) {
         uint32_t plane_id = drm->cursor_plane->plane_id;
         drmModePlane *updated = drmModeGetPlane(drm->drm_fd, plane_id);
-        if (updated) {
+        if (updated && updated->fb_id && updated->crtc_id) {
             *x = (int)updated->crtc_x;
             *y = (int)updated->crtc_y;
             drmModeFreePlane(updated);
             return 0;
+            drmModeFreePlane(updated);
+        }
+        else if (updated) {
+            drmModeFreePlane(updated);
         }
     }
     // Fallback: scan other cards for cursor position
