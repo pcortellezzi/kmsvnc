@@ -774,21 +774,55 @@ int drm_vendors() {
 
 int drm_get_cursor_position(int *x, int *y) {
     struct kmsvnc_drm_data *drm = kmsvnc->drm;
-    if (!drm->cursor_plane) {
-        *x = 0; *y = 0;
-        return 1;
+    if (drm->cursor_plane) {
+        uint32_t plane_id = drm->cursor_plane->plane_id;
+        drmModePlane *updated = drmModeGetPlane(drm->drm_fd, plane_id);
+        if (updated) {
+            *x = (int)updated->crtc_x;
+            *y = (int)updated->crtc_y;
+            drmModeFreePlane(updated);
+            return 0;
+        }
     }
-    // Re-query cursor plane for latest position
-    uint32_t plane_id = drm->cursor_plane->plane_id;
-    drmModePlane *updated = drmModeGetPlane(drm->drm_fd, plane_id);
-    if (!updated) {
-        *x = 0; *y = 0;
-        return 1;
+    // Fallback: scan other cards for cursor position
+    for (int i = 0; i < 10; i++) {
+        char path[32];
+        snprintf(path, sizeof(path), "/dev/dri/card%d", i);
+        if (!strcmp(path, kmsvnc->card)) continue;
+        if (access(path, F_OK)) continue;
+        int fd = open(path, O_RDONLY);
+        if (fd < 0) continue;
+        drmSetClientCap(fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
+        drmModePlaneRes *res = drmModeGetPlaneResources(fd);
+        if (!res) { close(fd); continue; }
+        for (int j = 0; j < res->count_planes; j++) {
+            drmModePlane *p = drmModeGetPlane(fd, res->planes[j]);
+            if (!p || p->fb_id == 0) { if(p) drmModeFreePlane(p); continue; }
+            uint64_t t = 114514;
+            drmModeObjectPropertiesPtr pr = drmModeObjectGetProperties(fd, p->plane_id, DRM_MODE_OBJECT_PLANE);
+            if (pr) {
+                for (int k = 0; k < pr->count_props; k++) {
+                    drmModePropertyPtr prop = drmModeGetProperty(fd, pr->props[k]);
+                    if (prop && !strcmp(prop->name, "type")) t = pr->prop_values[k];
+                    if (prop) drmModeFreeProperty(prop);
+                }
+                drmModeFreeObjectProperties(pr);
+            }
+            if (t == DRM_PLANE_TYPE_CURSOR) {
+                *x = (int)p->crtc_x;
+                *y = (int)p->crtc_y;
+                drmModeFreePlane(p);
+                drmModeFreePlaneResources(res);
+                close(fd);
+                return 0;
+            }
+            drmModeFreePlane(p);
+        }
+        drmModeFreePlaneResources(res);
+        close(fd);
     }
-    *x = (int)updated->crtc_x;
-    *y = (int)updated->crtc_y;
-    drmModeFreePlane(updated);
-    return 0;
+    *x = 0; *y = 0;
+    return 1;
 }
 
 void drm_composite_cursor_into_fb(char *fb, int fb_w, int fb_h, char *cursor, int c_w, int c_h, int c_x, int c_y) {
