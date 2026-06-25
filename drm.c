@@ -802,19 +802,22 @@ int drm_get_cursor_position(int *x, int *y) {
         for (int j = 0; j < res->count_planes; j++) {
             drmModePlane *p = drmModeGetPlane(fd, res->planes[j]);
             if (!p || p->fb_id == 0) { if(p) drmModeFreePlane(p); continue; }
-            uint64_t t = 114514;
+            uint64_t t = 114514, crtc_x_val = 0, crtc_y_val = 0;
             drmModeObjectPropertiesPtr pr = drmModeObjectGetProperties(fd, p->plane_id, DRM_MODE_OBJECT_PLANE);
             if (pr) {
                 for (int k = 0; k < pr->count_props; k++) {
                     drmModePropertyPtr prop = drmModeGetProperty(fd, pr->props[k]);
-                    if (prop && !strcmp(prop->name, "type")) t = pr->prop_values[k];
-                    if (prop) drmModeFreeProperty(prop);
+                    if (!prop) continue;
+                    if (!strcmp(prop->name, "type")) t = pr->prop_values[k];
+                    if (!strcmp(prop->name, "CRTC_X")) crtc_x_val = pr->prop_values[k];
+                    if (!strcmp(prop->name, "CRTC_Y")) crtc_y_val = pr->prop_values[k];
+                    drmModeFreeProperty(prop);
                 }
                 drmModeFreeObjectProperties(pr);
             }
             if (t == DRM_PLANE_TYPE_CURSOR) {
-                *x = (int)p->crtc_x;
-                *y = (int)p->crtc_y;
+                *x = crtc_x_val ? (int)crtc_x_val : (int)p->crtc_x;
+                *y = crtc_y_val ? (int)crtc_y_val : (int)p->crtc_y;
                 drmModeFreePlane(p);
                 drmModeFreePlaneResources(res);
                 close(fd);
