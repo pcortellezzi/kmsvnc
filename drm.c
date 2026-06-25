@@ -816,3 +816,128 @@ void drm_composite_cursor_into_fb(char *fb, int fb_w, int fb_h, char *cursor, in
         }
     }
 }
+
+static int capture_from_card(const char *card_path, char **data, int *width, int *height, int *crtc_x, int *crtc_y) {
+    int fd = open(card_path, O_RDONLY);
+    if (fd < 0) return 1;
+
+    int err = drmSetClientCap(fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
+    if (err < 0) { close(fd); return 1; }
+
+    drmModePlaneRes *plane_res = drmModeGetPlaneResources(fd);
+    if (!plane_res) { close(fd); return 1; }
+
+    int ret = 1;
+    for (int i = 0; i < plane_res->count_planes; i++) {
+        drmModePlane *plane = drmModeGetPlane(fd, plane_res->planes[i]);
+        if (!plane || plane->fb_id == 0 || plane->crtc_id == 0) {
+            if (plane) drmModeFreePlane(plane);
+            continue;
+        }
+        uint64_t plane_type = 114514;
+        drmModeObjectPropertiesPtr props = drmModeObjectGetProperties(fd, plane->plane_id, DRM_MODE_OBJECT_PLANE);
+        if (props) {
+            for (int j = 0; j < props->count_props; j++) {
+                drmModePropertyPtr prop = drmModeGetProperty(fd, props->props[j]);
+                if (prop && strcmp(prop->name, "type") == 0) {
+                    plane_type = props->prop_values[j];
+                }
+                if (prop) drmModeFreeProperty(prop);
+            }
+            drmModeFreeObjectProperties(props);
+        }
+        if (plane_type != DRM_PLANE_TYPE_CURSOR) {
+            drmModeFreePlane(plane);
+            continue;
+        }
+        drmModeFB2 *mfb = drmModeGetFB2(fd, plane->fb_id);
+        if (!mfb) {
+            drmModeFreePlane(plane);
+            continue;
+        }
+        if (mfb->pixel_format != KMSVNC_FOURCC_TO_INT('A', 'R', '2', '4') &&
+            mfb->pixel_format != KMSVNC_FOURCC_TO_INT('A', 'R', '3', '0') &&
+            mfb->pixel_format != KMSVNC_FOURCC_TO_INT('X', 'R', '2', '4')) {
+            drmModeFreeFB2(mfb);
+            drmModeFreePlane(plane);
+            continue;
+        }
+        // mmap cursor buffer
+        struct drm_gem_flink flink = {.handle = mfb->handles[0]};
+        if (drmIoctl(fd, DRM_IOCTL_GEM_FLINK, &flink)) {
+            drmModeFreeFB2(mfb); drmModeFreePlane(plane); continue;
+        }
+        struct drm_gem_open open_arg = {.name = flink.name};
+        if (drmIoctl(fd, DRM_IOCTL_GEM_OPEN, &open_arg)) {
+            drmModeFreeFB2(mfb); drmModeFreePlane(plane); continue;
+        }
+        struct drm_mode_map_dumb mreq = {.handle = open_arg.handle};
+        if (drmIoctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &mreq)) {
+            drmModeFreeFB2(mfb); drmModeFreePlane(plane); continue;
+        }
+        size_t size = mfb->width * mfb->height * BYTES_PER_PIXEL;
+        size_t mmap_size = open_arg.size;
+        if (mmap_size < size) {
+            drmModeFreeFB2(mfb); drmModeFreePlane(plane); continue;
+        }
+        char *mapped = mmap(NULL, mmap_size, PROT_READ, MAP_SHARED, fd, mreq.offset);
+        if (mapped == MAP_FAILED) {
+            drmModeFreeFB2(mfb); drmModeFreePlane(plane); continue;
+        }
+        size_t buf_size = size > mmap_size ? mmap_size : size;
+        char *buf = malloc(buf_size);
+        if (!buf) { munmap(mapped, mmap_size); drmModeFreeFB2(mfb); drmModeFreePlane(plane); continue; }
+        memcpy(buf, mapped, buf_size);
+        if (mfb->pixel_format == KMSVNC_FOURCC_TO_INT('X', 'R', '2', '4') ||
+            mfb->pixel_format == KMSVNC_FOURCC_TO_INT('A', 'R', '2', '4')) {
+            for (int p = 0; p < mfb->width * mfb->height; p++) {
+                int pi = p * 4;
+                uint32_t pix = htonl(*((uint32_t*)(buf + pi)));
+                buf[pi+0] = (pix & 0x0000ff00) >> 8;
+                buf[pi+2] = (pix & 0xff000000) >> 24;
+            }
+        } else if (mfb->pixel_format == KMSVNC_FOURCC_TO_INT('A', 'R', '3', '0')) {
+            for (int p = 0; p < mfb->width * mfb->height; p++) {
+                int pi = p * 4;
+                uint32_t pix = __builtin_bswap32(htonl(*((uint32_t*)(buf + pi))));
+                buf[pi+0] = (pix & 0x3ff00000) >> 20 >> 2;
+                buf[pi+1] = (pix & 0xffc00) >> 10 >> 2;
+                buf[pi+2] = (pix & 0x3ff) >> 2;
+                buf[pi+3] = (pix & 0xc0000000) >> 30 << 6;
+            }
+        }
+        *data = buf;
+        *width = mfb->width;
+        *height = mfb->height;
+        *crtc_x = (int)plane->crtc_x;
+        *crtc_y = (int)plane->crtc_y;
+        ret = 0;
+        munmap(mapped, mmap_size);
+        drmModeFreeFB2(mfb);
+        drmModeFreePlane(plane);
+        break;
+    }
+    drmModeFreePlaneResources(plane_res);
+    close(fd);
+    return ret;
+}
+
+int drm_capture_cursor_any(char **data, int *width, int *height, int *crtc_x, int *crtc_y) {
+    // First try the primary card
+    if (!drm_dump_cursor_plane(data, width, height) && *data) {
+        return drm_get_cursor_position(crtc_x, crtc_y);
+    }
+    // Fallback: scan other DRM cards
+    for (int i = 0; i < 10; i++) {
+        char path[32];
+        // Skip the primary card
+        snprintf(path, sizeof(path), "/dev/dri/card%d", i);
+        if (!strcmp(path, kmsvnc->card)) continue;
+        if (access(path, F_OK)) continue;
+        if (!capture_from_card(path, data, width, height, crtc_x, crtc_y)) {
+            KMSVNC_DEBUG("Cursor captured from fallback card %s\n", path);
+            return 0;
+        }
+    }
+    return 1;
+}

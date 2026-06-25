@@ -576,9 +576,12 @@ int main(int argc, char **argv)
                 cursor_frame %= CURSOR_FRAMESKIP;
                 if (!cursor_frame) {
                     char *data = NULL;
-                    int width, height;
-                    int err = drm_dump_cursor_plane(&data, &width, &height);
-                    if (!err && data) {
+                    int width = 0, height = 0;
+                    int cxc = 0, cyc = 0;
+                    int capture_ok = !drm_dump_cursor_plane(&data, &width, &height);
+                    if (!capture_ok && kmsvnc->embed_cursor)
+                        capture_ok = !drm_capture_cursor_any(&data, &width, &height, &cxc, &cyc);
+                    if (capture_ok && data) {
                         update_vnc_cursor(data, width, height);
                         if (kmsvnc->embed_cursor) {
                             int len = width * height * 4;
@@ -591,6 +594,8 @@ int main(int argc, char **argv)
                             }
                         }
                     }
+                    if (capture_ok && data && (data != kmsvnc->drm->kms_cursor_buf))
+                        free(data);
                 }
                 if (kmsvnc->embed_cursor && kmsvnc->embed_cursor_data) {
                     int c_x, c_y;
