@@ -818,6 +818,7 @@ int drm_get_cursor_position(int *x, int *y) {
                 drmModeFreePlane(p);
                 drmModeFreePlaneResources(res);
                 close(fd);
+                KMSVNC_DEBUG("cursor position from fallback %s: %d,%d\n", path, *x, *y);
                 return 0;
             }
             drmModeFreePlane(p);
