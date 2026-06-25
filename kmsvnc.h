@@ -54,8 +54,12 @@ struct kmsvnc_data
     rfbScreenInfoPtr server;
     char shutdown;
     char capture_cursor;
+    char embed_cursor;
     char *cursor_bitmap;
     int cursor_bitmap_len;
+    char *embed_cursor_data;
+    int embed_cursor_w;
+    int embed_cursor_h;
     char *buf;
     char *buf1;
 };

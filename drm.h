@@ -11,3 +11,5 @@ void drm_cleanup();
 int drm_open();
 int drm_vendors();
 int drm_dump_cursor_plane(char **data, int *width, int *height);
+int drm_get_cursor_position(int *x, int *y);
+void drm_composite_cursor_into_fb(char *fb, int fb_w, int fb_h, char *cursor, int c_w, int c_h, int c_x, int c_y);

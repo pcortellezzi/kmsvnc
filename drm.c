@@ -771,3 +771,48 @@ int drm_vendors() {
 
     return 0;
 }
+
+int drm_get_cursor_position(int *x, int *y) {
+    struct kmsvnc_drm_data *drm = kmsvnc->drm;
+    if (!drm->cursor_plane) {
+        *x = 0; *y = 0;
+        return 1;
+    }
+    // Re-query cursor plane for latest position
+    uint32_t plane_id = drm->cursor_plane->plane_id;
+    drmModePlane *updated = drmModeGetPlane(drm->drm_fd, plane_id);
+    if (!updated) {
+        *x = 0; *y = 0;
+        return 1;
+    }
+    *x = (int)updated->crtc_x;
+    *y = (int)updated->crtc_y;
+    drmModeFreePlane(updated);
+    return 0;
+}
+
+void drm_composite_cursor_into_fb(char *fb, int fb_w, int fb_h, char *cursor, int c_w, int c_h, int c_x, int c_y) {
+    // Clip cursor to screen bounds
+    int start_x = c_x > 0 ? c_x : 0;
+    int start_y = c_y > 0 ? c_y : 0;
+    int end_x = (c_x + c_w) < fb_w ? (c_x + c_w) : fb_w;
+    int end_y = (c_y + c_h) < fb_h ? (c_y + c_h) : fb_h;
+    if (start_x >= end_x || start_y >= end_y) return;
+    for (int y = start_y; y < end_y; y++) {
+        for (int x = start_x; x < end_x; x++) {
+            int ci = ((x - c_x) + (y - c_y) * c_w) * 4;
+            int fi = (x + y * fb_w) * 4;
+            uint8_t ca = (uint8_t)cursor[ci + 3];
+            if (ca == 0) continue;
+            if (ca == 255) {
+                fb[fi + 0] = cursor[ci + 0];
+                fb[fi + 1] = cursor[ci + 1];
+                fb[fi + 2] = cursor[ci + 2];
+            } else {
+                fb[fi + 0] = (uint8_t)(((uint16_t)cursor[ci + 0] * ca + (uint16_t)fb[fi + 0] * (255 - ca)) / 255);
+                fb[fi + 1] = (uint8_t)(((uint16_t)cursor[ci + 1] * ca + (uint16_t)fb[fi + 1] * (255 - ca)) / 255);
+                fb[fi + 2] = (uint8_t)(((uint16_t)cursor[ci + 2] * ca + (uint16_t)fb[fi + 2] * (255 - ca)) / 255);
+            }
+        }
+    }
+}

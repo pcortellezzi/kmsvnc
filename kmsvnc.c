@@ -205,6 +205,12 @@ static void cleanup() {
             free(kmsvnc->cursor_bitmap);
             kmsvnc->cursor_bitmap = NULL;
         }
+        if (kmsvnc->embed_cursor_data) {
+            free(kmsvnc->embed_cursor_data);
+            kmsvnc->embed_cursor_data = NULL;
+        }
+        kmsvnc->embed_cursor_w = 0;
+        kmsvnc->embed_cursor_h = 0;
         kmsvnc->cursor_bitmap_len = 0;
         free(kmsvnc);
         kmsvnc = NULL;
@@ -251,6 +257,7 @@ static struct argp_option kmsvnc_main_options[] = {
     {"disable-input", 'i', 0, OPTION_ARG_OPTIONAL, "Disable uinput"},
     {"desktop-name", 'n', "kmsvnc", 0, "Specify vnc desktop name"},
     {"password-file", 0xff0d, "", 0, "File containing password (max 8 characters)"},
+    {"embed-cursor", 0xff0e, 0, OPTION_ARG_OPTIONAL, "Embed cursor into framebuffer for remote viewing"},
     {0}
 };
 
@@ -311,6 +318,9 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state) {
             break;
         case 'c':
             kmsvnc->capture_cursor = 1;
+            break;
+        case 0xff0e:
+            kmsvnc->embed_cursor = 1;
             break;
         case 0xff03:
             kmsvnc->debug_capture_fb = arg;
@@ -431,6 +441,8 @@ int main(int argc, char **argv)
             }
         }
     }
+
+    if (kmsvnc->embed_cursor) kmsvnc->capture_cursor = 1;
 
     if (!kmsvnc->disable_input) {
         const char* XKB_DEFAULT_LAYOUT = getenv("XKB_DEFAULT_LAYOUT");
@@ -568,6 +580,34 @@ int main(int argc, char **argv)
                     int err = drm_dump_cursor_plane(&data, &width, &height);
                     if (!err && data) {
                         update_vnc_cursor(data, width, height);
+                        if (kmsvnc->embed_cursor) {
+                            int len = width * height * 4;
+                            if (kmsvnc->embed_cursor_data) free(kmsvnc->embed_cursor_data);
+                            kmsvnc->embed_cursor_data = malloc(len);
+                            if (kmsvnc->embed_cursor_data) {
+                                memcpy(kmsvnc->embed_cursor_data, data, len);
+                                kmsvnc->embed_cursor_w = width;
+                                kmsvnc->embed_cursor_h = height;
+                            }
+                        }
+                    }
+                }
+                if (kmsvnc->embed_cursor && kmsvnc->embed_cursor_data) {
+                    int c_x, c_y;
+                    if (!drm_get_cursor_position(&c_x, &c_y)) {
+                        drm_composite_cursor_into_fb(kmsvnc->buf,
+                            kmsvnc->drm->mfb->width, kmsvnc->drm->mfb->height,
+                            kmsvnc->embed_cursor_data, kmsvnc->embed_cursor_w, kmsvnc->embed_cursor_h,
+                            c_x, c_y);
+                        int mx = c_x > 0 ? c_x : 0;
+                        int my = c_y > 0 ? c_y : 0;
+                        int Mx = (c_x + kmsvnc->embed_cursor_w) < kmsvnc->drm->mfb->width
+                            ? (c_x + kmsvnc->embed_cursor_w) : kmsvnc->drm->mfb->width;
+                        int My = (c_y + kmsvnc->embed_cursor_h) < kmsvnc->drm->mfb->height
+                            ? (c_y + kmsvnc->embed_cursor_h) : kmsvnc->drm->mfb->height;
+                        if (mx < Mx && my < My) {
+                            rfbMarkRectAsModified(kmsvnc->server, mx, my, Mx, My);
+                        }
                     }
                 }
             }
