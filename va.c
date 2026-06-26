@@ -76,6 +76,7 @@ static const struct {
     {KMSVNC_FOURCC_TO_INT('A', 'R', '2', '4'), KMSVNC_FOURCC_TO_INT('B', 'G', 'R', 'A'), VA_RT_FORMAT_RGB32, 1},
     {KMSVNC_FOURCC_TO_INT('X', 'R', '3', '0'), KMSVNC_FOURCC_TO_INT('X', 'R', '3', '0'), VA_RT_FORMAT_RGB32_10, 0},
     {KMSVNC_FOURCC_TO_INT('A', 'R', '3', '0'), KMSVNC_FOURCC_TO_INT('A', 'R', '3', '0'), VA_RT_FORMAT_RGB32_10, 1},
+    {KMSVNC_FOURCC_TO_INT('A', 'B', '3', '0'), KMSVNC_FOURCC_TO_INT('A', 'B', '3', '0'), VA_RT_FORMAT_RGB32_10, 1},
 };
 
 struct va_fmt_data {
@@ -187,7 +188,8 @@ int va_init() {
         }
     }
     if (!rt_format) {
-        KMSVNC_FATAL("Unsupported pixfmt %s for vaapi, please create an issue with your pixfmt.", kmsvnc->drm->pixfmt_name);
+        KMSVNC_DEBUG("Unsupported pixfmt %s for vaapi, falling back to software\n", kmsvnc->drm->pixfmt_name);
+        return 1;
     }
     if (kmsvnc->debug_enabled) {
         printf("selected rt_format %u, alpha %d\n", rt_format, is_alpha);
